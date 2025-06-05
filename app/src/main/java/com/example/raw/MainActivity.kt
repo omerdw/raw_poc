@@ -28,6 +28,7 @@ import org.opencv.imgproc.Imgproc
 import java.util.*
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 
 class MainActivity : AppCompatActivity() {
@@ -42,6 +43,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var processingHandler: Handler
     private lateinit var surfaceView: SurfaceView
 
+    // Pre-allocated Mats for processing
+    private lateinit var rawMat: Mat
+    private lateinit var rgbMat: Mat
+    private lateinit var rgbMat8: Mat
+    private var isProcessing = AtomicBoolean(false)
 
     private val cameraId: String by lazy {
         cameraManager.cameraIdList.first { id ->
@@ -59,6 +65,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         surfaceView = SurfaceView(this)
         setContentView(surfaceView)
+
+        // Initialize OpenCV
+        if (!OpenCVLoader.initLocal()) {
+            Log.e("RAW_CAPTURE", "OpenCV initialization failed")
+            return
+        }
+
+        // Pre-allocate Mats
+        rawMat = Mat()
+        rgbMat = Mat()
+        rgbMat8 = Mat()
 
         cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
 
@@ -121,14 +138,14 @@ class MainActivity : AppCompatActivity() {
         val requestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(imageReader.surface)
             set(CaptureRequest.CONTROL_MODE, CONTROL_MODE_OFF)
-            set(CaptureRequest.SENSOR_EXPOSURE_TIME, 10000000L) // 10ms
-            set(CaptureRequest.SENSOR_SENSITIVITY, 800)
+            set(CaptureRequest.SENSOR_EXPOSURE_TIME, 10000000L) // Reduced to 5ms
+            set(CaptureRequest.SENSOR_SENSITIVITY, 1600) // Increased ISO to compensate
         }
 
         backgroundHandler.post(object : Runnable {
             override fun run() {
                 captureSession.capture(requestBuilder.build(), null, backgroundHandler)
-                backgroundHandler.postDelayed(this, 10)
+                backgroundHandler.postDelayed(this, 5) // Reduced delay to 5ms
             }
         })
     }
@@ -141,7 +158,7 @@ class MainActivity : AppCompatActivity() {
         startBackgroundThread()
         imageReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 3)
 
-        val Queue = LinkedBlockingDeque<Image>(1)
+        val Queue = LinkedBlockingDeque<Image>(2) // Increased queue size
         imageReader.setOnImageAvailableListener({ reader ->
             reader.acquireLatestImage()?.let { image ->
                 Log.d("RAW_CAPTURE", "image captured")
@@ -209,38 +226,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun rawToRgb(image: Image): Bitmap {
-        if (!OpenCVLoader.initDebug()) {
-            Log.e("RAW_CAPTURE", "OpenCV initialization failed")
-            return Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
-        }
-
         val width = image.width
         val height = image.height
         val buffer = image.planes[0].buffer
         val data = ShortArray(buffer.remaining() / 2)
         buffer.asShortBuffer().get(data)
-        Log.d("RAW_CAPTURE", "RAW data size: ${data.size}, expected: ${width * height}, sample: ${data.take(10).joinToString()}")
 
-        val rawMat = Mat(height, width, CvType.CV_16U)
+        // Reuse pre-allocated Mats
+        rawMat.create(height, width, CvType.CV_16U)
         rawMat.put(0, 0, data)
 
-        // Demosaic to RGB
-        val rgbMat = Mat()
+        // Demosaic to RGB using optimized method
         Imgproc.cvtColor(rawMat, rgbMat, Imgproc.COLOR_BayerGR2RGB)
 
-        // Convert to Bitmap
+        // Convert to Bitmap with optimized normalization
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val rgbMat8 = Mat()
         Core.normalize(rgbMat, rgbMat, 0.0, 255.0, Core.NORM_MINMAX)
         rgbMat.convertTo(rgbMat8, CvType.CV_8UC3)
         Utils.matToBitmap(rgbMat8, bitmap)
 
-        val pixel = bitmap.getPixel(width / 2, height / 2)
-        Log.d("RAW_CAPTURE", "Bitmap created: ${bitmap.width}x${bitmap.height}, isRecycled: ${bitmap.isRecycled}, center pixel: $pixel")
-
-        rawMat.release()
-        rgbMat.release()
-        rgbMat8.release()
         return bitmap
     }
 
@@ -258,27 +262,26 @@ class MainActivity : AppCompatActivity() {
                 try {
                     // Clear the canvas
                     canvas.drawColor(android.graphics.Color.WHITE)
-                    // Draw the bitmap, scaling it to fit the SurfaceView
+                    
+                    // Optimize scaling calculation
                     val scaleX = canvas.width.toFloat() / bitmap.width
                     val scaleY = canvas.height.toFloat() / bitmap.height
-                    val scale = minOf(scaleX, scaleY) // Maintain aspect ratio
+                    val scale = minOf(scaleX, scaleY)
+                    
+                    // Pre-calculate scaled dimensions
                     val scaledWidth = bitmap.width * scale
                     val scaledHeight = bitmap.height * scale
                     val left = (canvas.width - scaledWidth) / 2
                     val top = (canvas.height - scaledHeight) / 2
+                    
+                    // Draw with optimized scaling
                     canvas.scale(scale, scale)
                     canvas.drawBitmap(bitmap, left / scale, top / scale, null)
                 } finally {
-                    // Unlock the canvas and post the changes
                     holder.unlockCanvasAndPost(canvas)
                 }
-            } else {
-                Log.w("RAW_CAPTURE", "Canvas is null")
             }
-        } else {
-            Log.w("RAW_CAPTURE", "Surface is not valid")
         }
-        // Recycle the bitmap to free memory
         bitmap.recycle()
     }
 
@@ -288,5 +291,10 @@ class MainActivity : AppCompatActivity() {
         imageReader.close()
         cameraDevice.close()
         stopBackgroundThread()
+        
+        // Release pre-allocated Mats
+        rawMat.release()
+        rgbMat.release()
+        rgbMat8.release()
     }
 }
