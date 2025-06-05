@@ -161,12 +161,32 @@ class MainActivity : AppCompatActivity() {
 
                     processingHandler.post {
                         Log.d("PROCESSING_THREAD", "Image processing thread started")
+                        var frameCount = 0
+                        var lastFpsUpdateTime = System.nanoTime()
+                        var lastConversionTime = 0L
+                        
                         while (true) {
                             val image = Queue.pollFirst(500, TimeUnit.MILLISECONDS)
                             if (image != null) {
                                 try {
+                                    val startTime = System.nanoTime()
                                     val bitmap = rawToRgb(image)
+                                    lastConversionTime = System.nanoTime() - startTime
+                                    
                                     displayBitmap(bitmap)
+                                    
+                                    frameCount++
+                                    val currentTime = System.nanoTime()
+                                    val elapsedTime = currentTime - lastFpsUpdateTime
+                                    
+                                    if (elapsedTime >= 1_000_000_000) { // Update FPS every second
+                                        val fps = frameCount * 1_000_000_000.0 / elapsedTime
+                                        Log.d("PERFORMANCE", String.format("FPS: %.2f, Conversion time: %.2f ms", 
+                                            fps, lastConversionTime / 1_000_000.0))
+                                        frameCount = 0
+                                        lastFpsUpdateTime = currentTime
+                                    }
+                                    
                                     Log.d("RAW_CAPTURE", "image posted: ${image.timestamp}")
                                 } catch (e: Exception) {
                                     Log.e("RAW_CAPTURE", "Error processing image", e)
@@ -206,8 +226,7 @@ class MainActivity : AppCompatActivity() {
 
         // Demosaic to RGB
         val rgbMat = Mat()
-        // possibilities-  COLOR_BayerBG2RGB, COLOR_BayerGB2RGB, COLOR_BayerGR2RGB, COLOR_BayerRG2RGB
-        Imgproc.cvtColor(rawMat, rgbMat, Imgproc.COLOR_BayerRG2RGB)
+        Imgproc.cvtColor(rawMat, rgbMat, Imgproc.COLOR_BayerGR2RGB)
 
         // Convert to Bitmap
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
