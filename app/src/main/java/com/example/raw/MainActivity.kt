@@ -8,7 +8,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
-import android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
 import android.hardware.camera2.CameraMetadata.CONTROL_MODE_OFF
 import android.hardware.camera2.CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW
 import android.media.Image
@@ -25,7 +24,6 @@ import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
-import java.util.*
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -43,7 +41,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var processingHandler: Handler
     private lateinit var surfaceView: SurfaceView
 
-    // Pre-allocated Mats for processing
     private lateinit var rawMat: Mat
     private lateinit var rgbMat: Mat
     private lateinit var rgbMat8: Mat
@@ -59,14 +56,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private var latestRawImage: Image? = null // This is what you inspect during debugging
+    private var latestRawImage: Image? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         surfaceView = SurfaceView(this)
         setContentView(surfaceView)
 
-        // Initialize OpenCV
+
         if (!OpenCVLoader.initLocal()) {
             Log.e("RAW_CAPTURE", "OpenCV initialization failed")
             return
@@ -138,14 +135,14 @@ class MainActivity : AppCompatActivity() {
         val requestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(imageReader.surface)
             set(CaptureRequest.CONTROL_MODE, CONTROL_MODE_OFF)
-            set(CaptureRequest.SENSOR_EXPOSURE_TIME, 10000000L) // Reduced to 5ms
-            set(CaptureRequest.SENSOR_SENSITIVITY, 1600) // Increased ISO to compensate
+            set(CaptureRequest.SENSOR_EXPOSURE_TIME, 1000000L)
+            set(CaptureRequest.SENSOR_SENSITIVITY, 1600)
         }
 
         backgroundHandler.post(object : Runnable {
             override fun run() {
                 captureSession.capture(requestBuilder.build(), null, backgroundHandler)
-                backgroundHandler.postDelayed(this, 5) // Reduced delay to 5ms
+                backgroundHandler.postDelayed(this, 5)
             }
         })
     }
@@ -158,7 +155,7 @@ class MainActivity : AppCompatActivity() {
         startBackgroundThread()
         imageReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 3)
 
-        val Queue = LinkedBlockingDeque<Image>(2) // Increased queue size
+        val Queue = LinkedBlockingDeque<Image>(2)
         imageReader.setOnImageAvailableListener({ reader ->
             reader.acquireLatestImage()?.let { image ->
                 Log.d("RAW_CAPTURE", "image captured")
@@ -236,7 +233,7 @@ class MainActivity : AppCompatActivity() {
         rawMat.create(height, width, CvType.CV_16U)
         rawMat.put(0, 0, data)
 
-        // Demosaic to RGB using optimized method
+        // Demosaic to RGB using the correct method
         Imgproc.cvtColor(rawMat, rgbMat, Imgproc.COLOR_BayerGR2RGB)
 
         // Convert to Bitmap with optimized normalization
@@ -291,8 +288,7 @@ class MainActivity : AppCompatActivity() {
         imageReader.close()
         cameraDevice.close()
         stopBackgroundThread()
-        
-        // Release pre-allocated Mats
+
         rawMat.release()
         rgbMat.release()
         rgbMat8.release()
